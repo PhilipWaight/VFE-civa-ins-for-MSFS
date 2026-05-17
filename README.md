@@ -1,4 +1,4 @@
-# Virtual FLight Enginer - Flight Plan Automation for MSFS
+# Virtual Flight Enginer - Flight Plan Automation for MSFS
 
 VFE_civa_ins is a Python-based utility for **MSFS 2024** 
 that automates the entry of flight plan waypoints into the **CIVA INS** navigation unit,
@@ -217,8 +217,8 @@ EGLL D255G D259K WOD D100H CPT/F060 KENET UNZIB/F150 D149T/F280 BHD57 LESLU/F500
 >   in the onscreen message attached to each phase.
     
 ## 🚀 Roadmap
-- [] Add usage videos
-- [] Test in FSS B727
+- [ ] Add usage videos
+- [ ] Test in FSS B727
 - [ ] Add a popup message or a kneepad note to name waypoints as the `from-to` selector progresses.
 - [ ] An option to push a set of named waypoints on the fly for a diversion would be appealing, with a lookup to find the coordinates. This could involve some interaction with the EFB.
 - [ ] Extend to generic checklist named panel automation
