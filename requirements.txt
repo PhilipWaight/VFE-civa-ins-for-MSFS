@@ -1,0 +1,8 @@
+pyperclip
+pynput
+pypdf
+keyboard
+Simconnect
+comtypes
+psutil
+pywin32

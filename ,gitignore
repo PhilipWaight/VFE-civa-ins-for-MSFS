@@ -1,0 +1,29 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# PyInstaller build outputs
+build/
+dist/
+*.spec
+
+# Your OCR test image storage directory
+ocr_debug/
+
+# IDE files
+.vscode/
+.idea/
+
+# Environment variables / local settings
+.env
+.venv
+env/
+venv/
+ENV/
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+
+# MSFS temporary files (if any end up here)
+*.log
