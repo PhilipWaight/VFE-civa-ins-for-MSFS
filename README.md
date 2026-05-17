@@ -1,4 +1,4 @@
-# Virtual Flight Enginer - Flight Plan Automation for MSFS
+# Virtual Flight Engineer - Flight Plan Automation for MSFS
 
 VFE_civa_ins is a Python-based utility for **MSFS 2024** 
 that automates the entry of flight plan waypoints into the **CIVA INS** navigation unit,
