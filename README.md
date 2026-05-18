@@ -3,9 +3,9 @@
 VFE_civa_ins is a Python-based utility for **MSFS 2024** 
 that automates the entry of flight plan waypoints into the **CIVA INS** navigation unit,
 specifically for the **DC Designs Concorde**. The aircraft will fly under FMC control 
-if a full flight plan is loaded, and INS selected, but this loses the realism of Concorde navigation. This is a new application based on a previous version that handled the automation through "Macro Commander". This version has many new features including handling the automation natively.
+if a full flight plan is loaded, and INS selected, but this loses the realism of 1960's inertial navigation. This is a new application based on a previous version that used "Macro Commander" to push the buttons . This version has many new features including handling the automation natively.
  
-VFE_civa_ins parses standard `.pln` files, chunks them into up to 9 waypoint phases, and generates mouse-macro sequences.
+VFE_civa_ins parses standard `.pln` files, splits them into up to 9 waypoint phases, and generates mouse-macro sequences. It manages the flight plan load, monitors progress and warns of approaching phse load.
 
 There are 5 collapsible UI groups:
 - Load Flight Plan: Allows Simbrief generated flight plan to be loaded and processed into a macro form for hotkey triggered import.
