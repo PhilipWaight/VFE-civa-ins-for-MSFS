@@ -5,7 +5,7 @@ that automates the entry of flight plan waypoints into the **CIVA INS** navigati
 specifically for the **DC Designs Concorde**. The aircraft will fly under FMC control 
 if a full flight plan is loaded, and INS selected, but this loses the realism of 1960's inertial navigation. This is a new application based on a previous version that used "Macro Commander" to push the buttons . This version has many new features including handling the automation natively.
  
-VFE_civa_ins parses standard `.pln` files, splits them into up to 9 waypoint phases, and generates mouse-macro sequences. It manages the flight plan load, monitors progress and warns of approaching phse load.
+VFE_civa_ins parses standard `.pln` files, splits them into up to 9 waypoint phases, and generates mouse-macro sequences. It manages the flight plan load, monitors progress and warns of approaching phase load.
 
 There are 5 collapsible UI groups:
 - Load Flight Plan: Allows Simbrief generated flight plan to be loaded and processed into a macro form for hotkey triggered import.
@@ -119,10 +119,23 @@ This project was developed through a collaborative process between the author an
 >      This control template is implemented by the calibrate script.
 >      
 
+6.  **SImbrief Downloader**: Modify the `Formats to Download` list to include:
+
+- PDF Document: for oceanic segment highlight
+- FS2020: to include departure and arrival waypoints in the INS load
+- FS2020 (No SID/STAR): (more realistically) to exclude SID and STAR waypoints from the INS 
+- FS2024: for conventional EFB flight plan import in MSFS (for ATC, BeyondATC... etc)
 
 ## 📖 How to setup each flight plan
 
-1. Start MSFS. There is no need to load the flight plan via the EFB unless native ATC is required.A Simbrief generated plan will be available to external ATC apps. 
+1. Simbrief flight plan: Concorde flight plan needs to reflect acceleration and deceleration restrictions to ensure subsonic flight over land. In Simbrief this can be achieved with ** Dispatcher Remarks**. Edit this section before the generate. The inflight waypoint list dialogue will highlight the oceanic flight segment between the accel and decel waypoints. The following format will be read and decoded from a PDF downloader output file:
+```
+    ACCEL: PACSE
+    DECEL: 4027N07230W
+```
+
+
+2. Start MSFS. There is no need to load the flight plan via the EFB unless native ATC is required.A Simbrief generated plan will be available to external ATC apps. 
 
 2. `Import FLight Plan` Select your MSFS .pln flight plan when prompted. (eg EGLLKJFK_MFS_25Apr26.pln or EGLLKJFK_MFS_NoProc_25Apr26.pln).
 
@@ -143,23 +156,24 @@ This project was developed through a collaborative process between the author an
 
       ii. The CIVA INS (C/DU) on .
 
-      iii. Eight position `data selector` set to `WAY PT`
+      iii. Eight position `data selector` set to `WAY PT`. This is handled by **VFE**
 
       iv. `Waypoint/DME` selector set to zero. **This must be set manually.**, but a warning will be displayed on VFE if it is not 0.
 
 2. Set the CIVA view.
 	    
-    i. Hit the hotkey `Ctrl + Shift + 1` for phase 1 and watch  the points load for the first phase.
-    When complete, use `Ctrl + Shift + F1` to display a message box with each waypoint number, name and elevation.
+    i. **Prepare Device**: Set `Auto-Man` INS selector to `Auto` for automatic leg transition. If `FCU` on the right of the INS is visible set same switch to `Man` to cede flight plan control to the INS.
+    > This is an important step as if the full flight plan is loaded via the EFB, the FCU will control the plan if FCU-AUTO is selected.
+    
+    ii. **Import**: Hit the hotkey `Ctrl + Shift + 1` for phase 1 and watch  the points load for the first phase.
+    When complete, use `Ctrl + Shift + F1` at any time to display a message box with each waypoint number, name and elevation.
 
-	ii.  Manually click `Wy Pt Chg` button and select 0 to 1 (or the waypoint id for a `direct to` INS navigation direction, and `Insert`. The `From-To` display should change. The CIVA
-        convention {current location:0} to {waypoint number} should be used to initiate the device
-        for the first phase phase from the end of the departure phase, for example.
+	iii. **Arm Direct-To**: Manually click `Wy Pt Chg` button and select 0 to 1 (or the desired waypoint id for a `direct to` INS navigation direction, and `Insert`. The `From-To` display will change. The CIVA convention `current location:0` to `waypoint number` should be used to initiate the device for the first phase from the end of the SID, for example.
 
-	iii.  Clear `Hdg Hld`, select `INS Navigation` and hit `INS` on the AP panel.
+	iv. **Switch AP to INS nav**: Clear `Hdg Hld`, select `INS Navigation` and hit `INS` on the AP panel.
 
 3.  For subsequent phases, 
-	follow from step 2.i for the 2nd phase with `Ctrl + Shift + 2`.
+	follow steps 2.ii and 2.iii for subsequent phases with `Ctrl + Shift + 2,3...`.
 
 ## 📁 Using Radio Navigation In Conjunction with INS
 
@@ -194,7 +208,7 @@ The switch between radio nav and INS with an INS flight plan loaded should requi
     iii.  FlightPlanLoad.mkv
     iv.  CIVAInFlightUse.mkv
 
-8.  `tests\EGLLKJFK_MFS_NoProc_18Apr26.pln`: 
+8.  `tests\EGLLKJFK_MFS_NoProc_18Apr26.pln` and PDF: 
 
     A sample classic **Simbrief** flight plan used for testing.
     Modified as some original waypoints no longer exist. 
@@ -207,21 +221,21 @@ EGLL D255G D259K WOD D100H CPT/F060 KENET UNZIB/F150 D149T/F280 BHD57 LESLU/F500
 5041N01500W 5050N02000W 5030N03000W 4916N04000W 4703N05000W 4610N05300W 4414N06000W 
 4246N06500W 4200N06700W 4044N06955W 4027N07230W CAMRN KJFK
 ```
-    This should be placed in the flight plans Simbrief export folder.
+This could be placed in the flight plans Simbrief export folder as an example.
 
 > [!NOTE] 
 >   Simbrief does not recognise Concorde performance data and produces erroneous altitude predictions.
 >   A workaround is to use the wypt/Fnnn syntax to advise departure restriction, supersonic acceleration points
->   and expected cruise altitude waypoint altitudes. It seems to calculate a TOD with these minimal inputs. Simbrief will not accept flight level constraints on descent.
+>   and expected cruise altitude waypoint altitudes. To calculate a TOD with these minimal inputs. Simbrief will not accept flight level constraints on descent.
 >   To assist vertical profile planning, these altitudes will be displayed alongside the waypoint name
->   in the onscreen message attached to each phase.
+>   in the onscreen dialogue attached to each phase.
     
 ## 🚀 Roadmap
 - [ ] Add usage videos
 - [ ] Test in FSS B727
 - [ ] Add a popup message or a kneepad note to name waypoints as the `from-to` selector progresses.
 - [ ] An option to push a set of named waypoints on the fly for a diversion would be appealing, with a lookup to find the coordinates. This could involve some interaction with the EFB.
-- [ ] Extend to generic checklist named panel automation
+- [ ] Extend to handle generic checklist named panel automation.
 
 ## ⚖️ License
 
@@ -229,7 +243,7 @@ This project is licensed under the MIT License.
 
 ## System Architecture Summary Block
 
-Use this summary to initialise chat thread with Gemini or similar:
+Use this summary to initialise chat thread with Gemini or similar with follow on enhancements:
 
 Act as a Senior Win32 C and PyQt5 Python Software Engineer. We are developing "VFE" (Virtual Flight Engineer), a high-speed cockpit automation platform for Microsoft Flight Simulator. Do not explain basics. Maintain the following architectural context:
 
