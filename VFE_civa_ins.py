@@ -159,13 +159,32 @@ DEFAULT_INLINE_MSG = {
 }
 
 # Configure logging while degugging the new UI framework and CIVA button automation
+log_file = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "CFE_civa_ins.log")
 logging.basicConfig(
+    filename=log_file,
+    encoding='utf-8', 
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+logger.info("VFE_civa_ins started.")
 gLogging = False
 
+# 2. Create a custom stream object to intercept prints
+class LoggerWriter:
+    def __init__(self, log_level):
+        self.log_level = log_level
+
+    def write(self, message):
+        # Filter out empty lines/newlines sent by print()
+        if message.strip():
+            logging.log(self.log_level, message.strip())
+
+    def flush(self):
+        pass # Required for file-like object compatibility
+# 3. Overwrite the system stdout and stderr
+sys.stdout = LoggerWriter(logging.INFO)   # Redirect prints to INFO logs
+sys.stderr = LoggerWriter(logging.ERROR)  # Redirect crashes/errors to ERROR log
 
 """
 CIVA INS Flight Plan Processor - PyQt5 Windows UI Version
@@ -355,22 +374,23 @@ class FlightPlanProcessor:
         accel_name = ""
         decel_name = ""
         
-        try:
-            reader = PdfReader(pdf_path)
-            for page in reader.pages:
-                text = page.extract_text()
-                lines = text.splitlines()
-                
-                for line in lines:
-                    accel_match = re.search(r"ACCEL:\s*(\S+)", line)
-                    if accel_match:
-                        accel_name = accel_match.group(1)
+        if os.path.exists(pdf_path):
+            try:
+                reader = PdfReader(pdf_path)
+                for page in reader.pages:
+                    text = page.extract_text()
+                    lines = text.splitlines()
                     
-                    decel_match = re.search(r"DECEL:\s*(\S+)", line)
-                    if decel_match:
-                        decel_name = decel_match.group(1)
-        except Exception as e:
-            logger.debug(f"PDF read error (normal if no PDF): {e}")
+                    for line in lines:
+                        accel_match = re.search(r"ACCEL:\s*(\S+)", line)
+                        if accel_match:
+                            accel_name = accel_match.group(1)
+                        
+                        decel_match = re.search(r"DECEL:\s*(\S+)", line)
+                        if decel_match:
+                            decel_name = decel_match.group(1)
+            except Exception as e:
+                logger.debug(f"PDF read error (normal if no PDF): {e}")
         
         return accel_name, decel_name
 
@@ -1000,6 +1020,11 @@ class CIVAFlightPlanUI(QMainWindow):
             settingsfile = os.path.join(self.appdata_dir,filename)
             with open(settingsfile, "r") as f:
                 return json.load(f)
+            # 2. Trap empty file or corrupted JSON syntax error
+        except json.JSONDecodeError:
+            logger.info(f"Warning: {settingsfile} was empty or broken. Resetting to defaults.")
+            self.save_settings({}, settingsfile)
+            return {}
         except FileNotFoundError:
             return {}  # Return empty dict if file doesn't exist yet
 
@@ -1612,6 +1637,7 @@ class CIVAFlightPlanUI(QMainWindow):
             self.settings["waypoint_sel_loc"] = {}
             self.settings["waypoint_sel_loc"]["scn_x"] = self.waypoint_sel_x
             self.settings["waypoint_sel_loc"]["scn_y"] = self.waypoint_sel_y
+            self.save_settings(self.settings)
 
             detected_digit = self.wp_tracker.capture_and_ocr_digit(self.ui_instance)
             if detected_digit in range(10):
@@ -1765,19 +1791,22 @@ class CIVAFlightPlanUI(QMainWindow):
     
     def poll_simconnect_data(self):
         """Poll Simconnect for telemetry data (framework placeholder)."""
-        # TODO: Implement actual Simconnect data retrieval
-        if self.simconnect.connected:
-            scData = self.simconnect.get_aircraft_data()
-            if scData:
-                # logger.info(f"Simconnect Check: alt:{scData["alt"]}; gspd:{scData["spd"]}; lat:{scData["lat"]}; lng:{scData["lng"]} ")
-                self.update_telemetry("","",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
-                #logger.info(scData.keys())
-                #timer cycle 10 secs: Check progress against next phase and waypoint..
-                if scData["spd"] > 50 or True:
-                    # check current phase wps
-                    self.checkPhaseProgress(scData["lat"], scData["lng"] )
-        else:
+        try:
+            if self.simconnect.connected:
+                scData = self.simconnect.get_aircraft_data()
+                if scData:
+                    # logger.info(f"Simconnect Check: alt:{scData["alt"]}; gspd:{scData["spd"]}; lat:{scData["lat"]}; lng:{scData["lng"]} ")
+                    self.update_telemetry("","",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
+                    #logger.info(scData.keys())
+                    #timer cycle 10 secs: Check progress against next phase and waypoint..
+                    if scData["spd"] > 50 or True:
+                        # check current phase wps
+                        self.checkPhaseProgress(scData["lat"], scData["lng"] )
+            else:
+                pass
+        except:     # waiting for connection
             pass
+
     def checkPhaseProgress(self,curLat, curLng ):
         fp = self.flight_plan.current_plan  
                 #....phases[0].waypoints[0].altitude
@@ -2426,6 +2455,8 @@ def process_flight_plan(ui_instance):
     target_macro_dir = ui_instance.appdata_dir
         
     include_icao = True 
+    accel_name = ""
+    decel_name = ""   
         # messagebox.askyesno("Flightplan Filename Option", 
         # "Include Departure/Arrival ICAOs in the filename?\n\nFormat: root_FROM_TO_plnXX.pln")
 
@@ -2470,7 +2501,8 @@ def process_flight_plan(ui_instance):
         
         pdf_path = os.path.join(source_dir, pdf_name)
         # Get any OFP remarks to mark acceleration and deceleration points which may differ to TOD
-        accel_name, decel_name = Read_OFP_PDF (pdf_path)    
+        if os.path.exists(pdf_path):
+            accel_name, decel_name = Read_OFP_PDF (pdf_path)    
         # oceanic state preserved between phases  
         isOceanic = False        
          
@@ -3142,9 +3174,13 @@ class CIVA_INS_WP_Tracker:
                 digit_str = ocr_result.strip()
                 # Handle the specific '41' / '11' multi-character glitch gracefully
                 if len(digit_str) > 1:
+                    logger.info (f"Digit string returned from OCR: {digit_str}")
                     if '1' in digit_str and '4' in digit_str:
                         # If Tesseract returned '41', '11', or '71', the true dial index is 1
                         return 1
+                    elif '1' in digit_str and '0' in digit_str:
+                        # If Tesseract returned '10', the true dial index is 0
+                        return 0                    
                     else:
                         # General fallback: grab the first character if another number acts up
                         digit_str = digit_str[0]

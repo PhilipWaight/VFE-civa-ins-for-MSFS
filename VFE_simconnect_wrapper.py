@@ -250,17 +250,17 @@ if __name__ == "__main__":
     )
     
     # Test the wrapper
-    wrapper = create_simconnect_wrapper()
+    # wrapper = create_simconnect_wrapper()
     
-    print("Testing SimConnect Wrapper...")
-    print(f"Attempting connection...")
+    # print("Testing SimConnect Wrapper...")
+    # print(f"Attempting connection...")
     
-    if wrapper.connect(timeout=5):
-        print("✓ Connected to SimConnect")
-        print(f"  Position: {wrapper.get_position()}")
-        print(f"  Heading: {wrapper.get_heading()}")
-        print(f"  Ground Speed: {wrapper.get_ground_speed()}")
-        wrapper.disconnect()
-        print("✓ Disconnected from SimConnect")
-    else:
-        print("✗ Could not connect to SimConnect (this is normal if MSFS is not running)")
+    # if wrapper.connect(timeout=5):
+    #     print("✓ Connected to SimConnect")
+    #     print(f"  Position: {wrapper.get_position()}")
+    #     print(f"  Heading: {wrapper.get_heading()}")
+    #     print(f"  Ground Speed: {wrapper.get_ground_speed()}")
+    #     wrapper.disconnect()
+    #     print("✓ Disconnected from SimConnect")
+    # else:
+    #     print("✗ Could not connect to SimConnect (this is normal if MSFS is not running)")

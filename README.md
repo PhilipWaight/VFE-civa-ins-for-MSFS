@@ -122,7 +122,7 @@ This project was developed through a collaborative process between the author an
 
 ## 📖 How to setup each flight plan
 
-1. Start MSFS 
+1. Start MSFS. There is no need to load the flight plan via the EFB unless native ATC is required.A Simbrief generated plan will be available to external ATC apps. 
 
 2. `Import FLight Plan` Select your MSFS .pln flight plan when prompted. (eg EGLLKJFK_MFS_25Apr26.pln or EGLLKJFK_MFS_NoProc_25Apr26.pln).
 

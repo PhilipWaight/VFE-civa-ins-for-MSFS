@@ -10,7 +10,7 @@ if exist dist rmdir /s /q dist
 
 :: 2. Execute PyInstaller using the single file flag
 echo [*] Compiling standalone executable via PyInstaller...
-pyinstaller --clean --onefile --icon="vfe.ico" vfe_civa_ins.py
+pyinstaller --clean --onefile --noconsole --add-binary "C:\MSFS 2024 SDK\SimConnect SDK\lib\SimConnect.dll;."  --icon="vfe.ico" vfe_civa_ins.py
 if errorlevel 1 goto BUILD_FAILED
 
 :: 3. Create a clean distribution package folder
