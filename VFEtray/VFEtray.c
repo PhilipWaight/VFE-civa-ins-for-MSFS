@@ -26,6 +26,7 @@ typedef struct {
 // Custom Inter-Process Communication Messages from Python UI
 #define WM_VFE_EXECUTE_PHASE (WM_USER + 10) // wParam = Phase Number (1-9)
 #define WM_VFE_DISPLAY_INFO  (WM_USER + 11) // wParam = Waypoint Number (1-9)
+#define WM_VFE_WP_SEL        (WM_USER + 12) // wParam = flag: run sel_cmds(0-9).txt
 
 NOTIFYICONDATAA nid;
 HWND g_hWnd = NULL;
@@ -347,6 +348,30 @@ void ActivateSimulatorWindow() {
     }
 }
 
+void ActivateSimulatorWindowNew() {
+    HWND msfsHwnd = GetHwndByPartialTitle("Microsoft Flight Simulator");
+
+    if (msfsHwnd) {
+        // Check if MSFS is already the active foreground window
+        if (GetForegroundWindow() == msfsHwnd) {
+            return; 
+        }
+
+        if (IsIconic(msfsHwnd)) {
+            ShowWindow(msfsHwnd, SW_RESTORE);
+        }
+        
+        SetForegroundWindow(msfsHwnd);
+        BringWindowToTop(msfsHwnd);
+        
+        SendMessage(msfsHwnd, WM_ACTIVATE, WA_CLICKACTIVE, 0);
+        Sleep(300); 
+    } else {
+        writeLog("ERROR: Microsoft Flight Simulator target interface window not found.\n");
+    }
+}
+
+
 
 // 2. Corrected Window Procedure
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -402,7 +427,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
-
     if (msg == WM_VFE_DISPLAY_INFO) {
         int wp_num = (int)wParam;
         FILE* triggerFile = fopen("vfe_dialogue.trigger", "w");
@@ -413,7 +437,35 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
+    // Run sel_cmdN.txt for a specified set of cmds eg. wypt sel value locator
+    if (msg == WM_VFE_WP_SEL) {
+        int flag = (int)wParam;
+        char macroFilename[64];
+        char absolutePath[MAX_PATH];
+
+        if (g_firstRun == 1) {writeLog("VFEtray v1.0.0\n");g_firstRun--;}             
+        // Build filename string
+        sprintf(macroFilename, "sel_cmd%d.txt", flag);
+        writeLog("Processing: %s\n", macroFilename);
+        
+        // Resolve absolute %APPDATA%\msfsVFE\macro_pX.txt location
+        GetVFEAppdataPath(macroFilename, absolutePath);
+        
+        ActivateSimulatorWindow();
+        ExecuteMacroFile(absolutePath); // Parses macro from Appdata folder
+        // Create macro complete msg file...
+        FILE* tFile = fopen("vfe_cmd.trigger", "w");
+        if (tFile) {
+            fprintf(tFile, "1");
+            fclose(tFile);
+            writeLog("vfe_cmd.trigger written\n", macroFilename);            
+        }        
+
+        return 0;
+    }
+
     return DefWindowProc(hWnd, msg, wParam, lParam);
+
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {

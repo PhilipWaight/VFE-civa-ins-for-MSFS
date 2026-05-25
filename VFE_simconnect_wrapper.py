@@ -28,6 +28,8 @@ class SimConnectWrapper:
     def __init__(self, app_name: str = "CIVA INS Flight Plan Processor"):
         self.app_name = app_name
         self.connected = False
+        self.flightLoaded = False
+        self.flightActive = False
         self.sm = None
         self._data_callback = None
         
@@ -42,23 +44,38 @@ class SimConnectWrapper:
             bool: True if connection successful
         """
         try:
+
+            import os
+            import sys
+
+            # Check if running as a PyInstaller bundle
+            if getattr(sys, 'frozen', False):
+                bundle_dir = sys._MEIPASS
+                os.add_dll_directory(bundle_dir)
+            else:
+                # Fallback for your local "py vfe_civa_ins.py" testing
+                os.add_dll_directory(r"C:\MSFS 2024 SDK\SimConnect SDK\lib")
+
             # Try to import py-simconnect
             from SimConnect import SimConnect, AircraftRequests
             
             self.sm = SimConnect(True)  #, self.app_name)
+            # 2. Create a SystemEvents request helper
+            #self.sys_events = SystemEvents(self.sm)
+
             self.aq = AircraftRequests(self.sm)
             self.connected = True
             #logger.info("Connected to SimConnect")
             return True
             
-        except ImportError:
-            # Fall back to comtypes approach
-            try:
-                return self._connect_comtypes(timeout)
-            except Exception as e:
-                logger.warning(f"SimConnect not available: {e}")
-                self.connected = False
-                return False
+        # except ImportError:
+        #     # Fall back to comtypes approach
+        #     try:
+        #         return self._connect_comtypes(timeout)
+        #     except Exception as e:
+        #         logger.warning(f"SimConnect not available: {e}")
+        #         self.connected = False
+        #         return False
         except Exception as e:
             logger.error(f"Failed to connect to SimConnect: {e}")
             self.connected = False
@@ -115,26 +132,69 @@ class SimConnectWrapper:
         """
         if not self.connected:
             return None
-            
         try:
-            # Request aircraft data
-            # This is a simplified version - full implementation would
-            # define custom data definitions and request specific fields
+            # simstate = self.SimConnect_RequestSystemState("Sim")
+            # # user in UI menus
+            # if simstate == 0:
+            #     self.flightLoaded = False 
+            #     data = {
+            #         "flight_loaded": False}
+            #     return data
+            # elif simstate == 1:
 
+                # Request aircraft data
+                # This is a simplified version - full implementation would
+                # define custom data definitions and request specific fields
+
+            # 3. Listen for specific MSFS system state changes
+            # For example: checking if the simulation is active ("Sim")
+            #logger.info(f"get aircraft data - AQ")
             data = {
-                "timestamp": time.time(),
-                "connected": self.connected,
+                "flight_loaded":    True,
+                # "ui_active": True,  
+                "in_active_pause":  self.aq.get("IS IN ACTIVE PAUSE"),              
+                "in_ctr_area":      self.aq.get("IS IN CTR AREA"), 
+                "lights_on":        self.aq.get("IS ANY INTERIOR LIGHT ON"), 
+                "sim_on_ground":    self.aq.get("SIM ON GROUND"), 
+                "timestamp":        time.time(),
+                "connected":        self.connected,
+                #"category": self.aq.get("AIRCRAFT CATEGORY"),   
                 "alt": round(self.aq.get("PLANE_ALTITUDE")),
                 "spd": round(self.aq.get("GROUND_VELOCITY")),                
                 "lat": round(self.aq.get("PLANE_LATITUDE"), 6),
                 "lng": round(self.aq.get("PLANE_LONGITUDE"), 6)                                
             }
+            # 1. Fetch the raw bytes from the AircraftRequests object for string items
+            data["title"] = self.get_sm_string("TITLE", "Unknown Aircraft")
+            #logger.info(f"scw: {data}")
+            # conditions for being active in cockpit
+            self.flightLoaded = True 
+            # change state if end flight - no specifc var
+            self.flightActive = (data["spd"] > 0 or \
+                                #data["title"] != "" or \
+                                #data["lights_on"] == 1 or \
+                                data["sim_on_ground"] == 1 or \
+                                data["in_ctr_area"] == 1)
             return data
             
         except Exception as e:
+            self.flightLoaded = False
             logger.debug(f"Error getting aircraft data: {e}")
             return None
-    
+
+    def get_sm_string (self, dataref, defstr):
+        raw_title_bytes = self.aq.get(dataref)
+        locstr = ""
+        if raw_title_bytes:
+            # 2. Split at the first null character to truncate the padding
+            # 3. Decode the valid data slice safely into a python string
+            locstr = raw_title_bytes.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
+        else:
+            locStr = defstr
+        return locstr
+        
+
+
     def get_position(self) -> Optional[Dict[str, float]]:
         """
         Get current aircraft position.

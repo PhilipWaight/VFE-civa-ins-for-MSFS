@@ -35,12 +35,17 @@ import psutil
 import win32gui
 import win32con
 import win32process
-import win32con
+
 # No changes needed to the focus function logic!
 import subprocess
 
 # SimConnect
 from VFE_simconnect_wrapper import SimConnectWrapper
+
+# HotkeyWrapper
+from VFE_hotkey import HotkeyWrapper
+LOWLEVEL_HK = True
+
 
 # Mouse/Keyboard automation
 from pynput import mouse, keyboard
@@ -81,7 +86,7 @@ import pytesseract
 
 __author__  = "Philip Waight"
 __ai__      =  "Gemini"
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __status__  = "Beta"  #  "Production", "Dev", "Beta"
 
 # Explicitly tell Windows this is a unique application, not generic Python
@@ -159,10 +164,13 @@ DEFAULT_INLINE_MSG = {
 }
 
 # Configure logging while degugging the new UI framework and CIVA button automation
-log_file = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "CFE_civa_ins.log")
+log_file = os.path.join(os.path.dirname \
+        (sys.executable if getattr(sys, 'frozen', False) else __file__), \
+        "VFE_civa_ins.log")
 logging.basicConfig(
     filename=log_file,
     encoding='utf-8', 
+    filemode='w',     
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -183,8 +191,8 @@ class LoggerWriter:
     def flush(self):
         pass # Required for file-like object compatibility
 # 3. Overwrite the system stdout and stderr
-sys.stdout = LoggerWriter(logging.INFO)   # Redirect prints to INFO logs
-sys.stderr = LoggerWriter(logging.ERROR)  # Redirect crashes/errors to ERROR log
+#sys.stdout = LoggerWriter(logging.INFO)   # Redirect prints to INFO logs
+#sys.stderr = LoggerWriter(logging.ERROR)  # Redirect crashes/errors to ERROR log
 
 """
 CIVA INS Flight Plan Processor - PyQt5 Windows UI Version
@@ -201,8 +209,8 @@ See README.md for detailed setup instructions
 # =============================================================================
 
 class FlightPlanProcessor:
-    """Handles flight plan parsing and phase generation."""
-    
+    """Handles hotkey listening, flight plan parsing and phase generation."""
+
     def __init__(self, ui_instance):
         # calibration_path: str):
         self.ui = ui_instance
@@ -211,36 +219,58 @@ class FlightPlanProcessor:
         # Use a Lock to prevent multiple macros from firing at once
         self.ui.macro_lock = threading.Lock()
 
+
     def bind_all_sequences(self):
         # Clear previous bindings and interrupts to prevent overlap
         try:
             self.ui.worker = FlightPlanWorker(self.ui)  # Re-instantiate to reset state
-            global_kb.unhook_all()
+            if not LOWLEVEL_HK: global_kb.unhook_all()
             self.ui.worker.is_cancelled = False
+            self.hkm = self.ui.hotkeymgr   
+            self.hkm.VK_hotkeys = {}         
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"bind hotkeys fail: {e}")
+            return 
             pass # Safety catch for uninitialized listeners
+
         # 0. bind interrupt hotkey (Shift + Esc)
         # interrupt trapped in VFEtray
         # global_kb.add_hotkey('shift+esc', self.ui.worker.cancel, suppress=True)
 
-        # 1. Bind Phase Load Sequence (e.g., Ctrl+Shift+1, +2, +3...)
+        # Define custom app hotkeys using Virtual Key (VK) codes
+        # Example: Ctrl + Shift + M (VK codes: Ctrl=17, Shift=16, M=77)
+        # VFE_HOTKEYS = {
+        #     (frozenset([win32con.VK_CONTROL, win32con.VK_SHIFT]), 77): "toggle_map_overlay",
+        #     # Example: Alt + K (VK codes: Alt=18, K=75)
+        #     (frozenset([win32con.VK_MENU]), 75): "mark_waypoint"
+        # }
+        #map self.ui.phase_hotkey ctrl+shift etc to VK
+
+        # user_config = {
+        #     "Ctrl + Shift + M": "toggle_map_overlay",
+        #     "alt-k": "mark_waypoint"
+
+        # 1. Bind Phase Load Sequence (e.g., Ctrl+Shift+1/num1, +2, +3...)
         self.setup_sequence(
             start_key=self.ui.phase_hotkey, 
-            count=self.ui.total_phases, 
+            count=len(self.ui.flight_plan.current_plan.phases), 
             callback=self.ui.trigger_phase_macro,
-            is_f_key=False
+            is_f_key=False, name_prefix="phase"
         )
 
         # 2. Bind Waypoint Info Sequence (e.g., Ctrl+Shift+F1, +F2, +F3...)
         self.setup_sequence(
             start_key=self.ui.waypoint_hotkey, 
-            count=self.ui.total_phases, 
+            count=len(self.ui.flight_plan.current_plan.phases), 
             callback=self.ui.trigger_waypoint_info,
-            is_f_key=True
+            is_f_key=True, name_prefix="wplist"
         )
 
-    def setup_sequence(self, start_key, count, callback, is_f_key):
+        # arm hotkeys....
+        self.hkm.arm()
+
+    def setup_sequence(self, start_key, count, callback, is_f_key, name_prefix):
         # Split 'ctrl+shift+1' -> base='ctrl+shift', key='1'
         parts = start_key.split('+')
         base_modifiers = "+".join(parts[:-1])
@@ -256,9 +286,14 @@ class FlightPlanProcessor:
                 current_key = str(int(start_val) + i)
 
             full_hotkey = f"{base_modifiers}+{current_key}"
-            
+            logger.info(f"Arm hotkey base: {base_modifiers} key:{current_key} full:{full_hotkey}")
+            config = {}
+            config[full_hotkey] = f"{name_prefix}{i+1}"
+            islast = (i == count - 1)
+            self.hkm.add_hotkey(config, islast)
+
             # Bind with 'n=i+1' to freeze the ID in the lambda
-            global_kb.add_hotkey(full_hotkey, lambda n=i+1: callback(n))
+            if not LOWLEVEL_HK: global_kb.add_hotkey(full_hotkey, lambda n=i+1: callback(n))
 
             # Phase Load Hotkeys Callback Connection:
             #global_kb.add_hotkey(full_hotkey, lambda n=i+1: self.ui.trigger_phase_macro(n))
@@ -281,9 +316,11 @@ class FlightPlanProcessor:
                             self.calibration_data[current_button] = []
                         elif current_button:
                             self.calibration_data[current_button].append(clean_line)
+                    return True
             except Exception as e:
                 logger.error(f"Failed to load calibration: {e}")
-    
+        return False
+
     def load_flight_plan(self, file_path: str) -> FlightPlan:
         """Load and parse a flight plan file."""
         tree = ET.parse(file_path)
@@ -415,7 +452,7 @@ class FlightPlanWorker(QThread):
     def run(self, phase_num):
         self.status_changed.emit(f"VFE: Starting Phase {phase_num} Load...")
         # Trigger mouse movement logic here
-        result = load_phase_to_civa(self, phase_num)  #self.current_phase
+        result = self.load_phase_to_civa(phase_num)  #self.current_phase
         if result.get('success'):
             self.status_changed.emit(result.get('message'))
             self.status_changed.emit(f"✅ Armed hotkeys for MSFS load")
@@ -423,7 +460,55 @@ class FlightPlanWorker(QThread):
             self.status_changed.emit(f"❌ {result.get('message')}")
             QApplication.processEvents()  # Alert the user with a beep on failure
             self.cancel()  # Ensure we stop any ongoing processing if there's an error
+
+    def load_phase_to_civa(self, phase_num: int) -> Dict[str, Any]:
+        """
+        Load a phase to CIVA INS using automation.
+        This replaces the Macro Commander macro execution.
+        """
+        #if not self.flight_plan.waypoints:
+        #    return {"success": False, "error": "No flight plan loaded"}
+        try:
+            if self.ui.is_loading:
+                return {"success": False, "error": "Loading already in progress"}
+            
+            phase = self.ui.flight_plan.current_plan.phases[phase_num - 1]
+            self.ui.is_loading = True
+            self.ui.worker.isRunning = True
+            set_focus_by_exe("FlightSimulator2024.exe", self.ui)
+
+            # Set data selector to WAY PT
+            self.ui.automation.set_data_selector("WAY PT")
+            #Set auto-man selector to AUTO
+            #self.push_button("automan")
+
+            if gLogging: 
+                if gLogging: logger.info("Set data selector to WAY PT")
+                self.status_changed.emit(f"Set data selector to WAY PT")
+            set_focus_instant(self.ui)      # Enter each waypoint
+            for wp in phase.waypoints:
+                #self.status_changed.emit(f"Waypoint loading {wp.name}.")
+                if not self.ui.automation.enter_waypoint(wp):
+                    # interrupted
+                    return {
+                        "success": False,
+                        "message": f"Interrupted at {wp.name} "
+                    }
+                wp.loaded = True
+
+            self.status_changed.emit(f"Completed waypoint loading for Phase {phase_num}.")
+            self.lastwpwarn_clear = False       # arm next warning
         
+            return {
+                "success": True,
+                "message": f"Phase {phase_num} loaded ({len(phase.waypoints)} waypoints)"
+            }
+        except Exception as e:
+            logger.error(f"Phase load error: {e}")
+            return {"success": False, "error": str(e)}
+        finally:
+            self.ui.is_loading = False
+
     def test(self):
         steps = ["Initializing...", "Parsing Data...", "Moving Mouse...", "Finalizing..."]
         
@@ -484,7 +569,7 @@ class CalibrationWorker(QThread):
 # ============================================================================
 # PYQT5 UNIVERSAL WORKER - processing functions
 # ============================================================================
-
+#region
 #class UniversalWorker(QThread):
 #    progress_changed = pyqtSignal(int)
 #    status_changed = pyqtSignal(str)
@@ -494,7 +579,7 @@ class CalibrationWorker(QThread):
 #        super().__init__()
 #        self.task_function = task_function  # Pass your logic function here
 #        self.is_cancelled = False
-
+#
 #    def run(self):
         # Execute the specific function passed during init
 #        self.task_function(self) 
@@ -523,6 +608,7 @@ class CalibrationWorker(QThread):
 #    self.worker = UniversalWorker(process_alpha)
 #    self.worker.status_changed.connect(self.statusLabel.setText)
 #    self.worker.start()
+#endregion UNIVERSAL WORKER
 
 class wplistDialog(QDialog):
     def __init__(self, title, html_content, w_pct, h_pct):
@@ -617,7 +703,8 @@ class CIVAFlightPlanUI(QMainWindow):
         self.calibration_status = False
         self.calibration_path = False
         self.simconnect_connected = False
-        self.msfs_running = False
+        self.msfs_hwnd = 0
+        self.is_sim_running = False
         self.current_phase = 0
         self.total_phases = 0
         self.generated_phases = []
@@ -653,16 +740,8 @@ class CIVAFlightPlanUI(QMainWindow):
         self.simconnect = SimConnectWrapper("CIVA INS simconnect")
         self.flight_plan = FlightPlanProcessor(self)
         self.automation = CivaButtonPusher(self)
-        self.storage = LocalStorage()   
-        # initialise wp tracker and check OCR status
-        self.wp_tracker = CIVA_INS_WP_Tracker(self) 
-        waypoint_sel_loc =self.settings.get("waypoint_sel_loc")
-        if waypoint_sel_loc:
-            self.waypoint_sel_x =waypoint_sel_loc["scn_x"]
-            self.waypoint_sel_y =waypoint_sel_loc["scn_y"]
-        else:
-            self.waypoint_sel_x = 0
-            self.waypoint_sel_y = 0          
+        self.storage = LocalStorage()
+        self.hotkeymgr = HotkeyWrapper(self)
        
         # Setup the Worker
         self.worker = FlightPlanWorker(self)
@@ -676,7 +755,9 @@ class CIVAFlightPlanUI(QMainWindow):
 
         # Track runtime environment configurations
         self.waypoint_html_data = {} # Caches your dynamic HTML strings
-        self.trigger_file = "vfe_dialogue.trigger"
+        triggerF = "vfe_dialogue.trigger"
+        # Join with filename for a full, safe path
+        self.trigger_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), triggerF)        
 
         # Asynchronous trigger watcher for crisp HTML dialogue rendering
         self.dialogue_watcher = QTimer(self)
@@ -686,15 +767,24 @@ class CIVAFlightPlanUI(QMainWindow):
         self.request_inline_msg_ui.connect(self.render_inline_macro_msg) 
 
         # 2. Connect the thread-safe bridge signal to your dialogue renderer
-        self.request_waypoint_ui.connect(self.show_html_waypoint_dialogue)
+        self.request_waypoint_ui.connect(self.toggle_html_waypoint_dialogue)
 
         # 3. Connect the thread-safe signal to your actual UI update function
         self.request_log_update.connect(self._safe_append_log)
 
         # Safe launch configuration for the C Companion
-       
         self.launch_vfe_tray()
-        
+
+        # UI avail: initialise wp tracker and check OCR status
+        self.wp_tracker = CIVA_INS_WP_Tracker(self) 
+        waypoint_sel_loc =self.settings.get("waypoint_sel_loc")
+        if waypoint_sel_loc:
+            self.waypoint_sel_x =waypoint_sel_loc["scn_x"]
+            self.waypoint_sel_y =waypoint_sel_loc["scn_y"]
+        else:
+            self.waypoint_sel_x = 0
+            self.waypoint_sel_y = 0  
+
 # ============================================================================
 
     def launch_vfe_tray(self):
@@ -735,6 +825,9 @@ class CIVAFlightPlanUI(QMainWindow):
             # Post direct Exit Command Token to the C WndProc handler loop
             win32gui.PostMessage(tray_hwnd, win32con.WM_COMMAND, 1001, 0) # 1001 = ID_TRAY_EXIT
         
+        # stop hotkey
+        self.hotkeymgr.stop_persistent_hook()        
+       
         # Housekeeping: Purge active runtime files
         for i in range(1, 10):
             try: os.remove(f"macro_p{i}.txt")
@@ -744,6 +837,8 @@ class CIVAFlightPlanUI(QMainWindow):
             except Exception: pass
 
         event.accept()
+
+        #root.protocol("WM_DELETE_WINDOW", on_close)
 
     def export_vfe_macros(self, processed_flight_plan):
         """
@@ -789,24 +884,146 @@ class CIVAFlightPlanUI(QMainWindow):
             #     </body>
             # </html>
             # """
+    def check_VFE_complete(self):
+        if os.path.exists(self.trigger_file):
+            maxwait = 10
+            if os.path.exists(self.trigger_file):
+                try: os.remove(self.trigger_file)
+                except Exception: pass# Consume token file instantly
+
+    
+    def trigger_wyptsel_macros(self, setnum, cmdset, isTest):
+        """
+        Call after flightPlanProcessor completes parsing.
+        Expects processed_flight_plan to be a dictionary structure containing the legs.
+        """
+        cmd_trigger = "vfe_cmd.trigger"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Join with filename for a full, safe path
+        trigger_path = os.path.join(base_dir, cmd_trigger)
+
+        if os.path.exists(trigger_path):
+            try: os.remove(trigger_path) # Remove token file
+            except Exception: pass
+
+        filename = os.path.join(self.appdata_dir, f"sel_cmd{setnum:01d}.txt")
+        if os.path.exists(filename):
+            try: os.remove(filename) # Remove token file
+            except Exception: pass           
+        with open(filename, "w") as f:
+            # Loop the macro string objects built inside your calibration module
+            for cmd in cmdset:
+                f.write(f"{cmd}\n")
+
+        """Run execution logic for selected cmds"""
+        tray_hwnd = win32gui.FindWindow("VFEEngineTrayClass", "VFE Tray Engine")
+        if tray_hwnd and self.ocr_available == True:
+            # Check correct waypoint selector - 0
+
+# Blocks automatically and returns the direct status code from the tray app
+#response = win32gui.SendMessage(target_hwnd, CUSTOM_MSG_ID, wparam, lparam)
+
+# No while loop needed! Execution only continues once the macro completes.
+#print(f"Macro finished with status: {response}")
+
+            # PostMessage Signal WM_VFE_WP_SEL (WM_USER + 12)
+            response = win32gui.SendMessage(tray_hwnd, win32con.WM_USER + 12, setnum, 0)
+            logger.info(f"Macro finished with status: {response}")
+            #self.wait_for_trigger(trigger_path)
+            digit1 = self.check_waypoint_selector(False, isTest)
+
+            response = win32gui.SendMessage(tray_hwnd, win32con.WM_USER + 12, setnum, 0)
+            logger.info(f"Macro finished with status: {response}")
+            #self.wait_for_trigger(trigger_path)
+            digit2 = self.check_waypoint_selector(False, isTest)
+            #self.update_progress_log(f"VFE: Selected cmds result {digit1}, {digit2}")
+            return digit1, digit2
+        return None, None
+    
+    def trigger_gen_macro(self, command):
+        """
+        Send a custom set of macro commands ...
+        """
+        # Extract command set from calibration and run sequentially
+        try:
+            cd = self.flight_plan.calibration_data         
+            # set automan to auto (default forward scroll)
+            cmdset = []
+            #logger.info (f"TGM: {command}")
+            for cmd in command:
+                thisset = cd.get(cmd, [])
+                #logger.info (f"TGM: {thisset}")
+                cmdset.extend(thisset)
+            #logger.info (f"TGM: list built")        
+            setnum = 0
+            cmd_trigger = "vfe_cmd.trigger"
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            # Join with filename for a full, safe path
+            trigger_path = os.path.join(base_dir, cmd_trigger)
+
+            if os.path.exists(trigger_path):
+                try: os.remove(trigger_path) # Remove token file
+                except Exception: pass
+
+            filename = os.path.join(self.appdata_dir, f"sel_cmd{setnum:01d}.txt")
+            if os.path.exists(filename):
+                try: os.remove(filename) # Remove token file
+                except Exception: pass        
+            with open(filename, "w") as f:
+                # Loop the macro string objects for selected command
+                for cmd in cmdset:
+                    f.write(f"{cmd}\n")
+                    # after First MSFS move in a random cmd, 
+                    # wait for highlight to activate
+                    # if "<mm>" in cmd:
+                    #     f.write(f"<wx>(1000,0)<#>\n")
+
+            """Run execution logic for selected cmds"""
+            tray_hwnd = win32gui.FindWindow("VFEEngineTrayClass", "VFE Tray Engine")
+            if tray_hwnd and self.ocr_available == True:
+                # Signal WM_VFE_WP_SEL (WM_USER + 12)
+                response = win32gui.SendMessage(tray_hwnd, win32con.WM_USER + 12, setnum, 0)
+                logger.info(f"Macro finished with status: {response}")                
+                #win32gui.PostMessage(tray_hwnd, win32con.WM_USER + 12, setnum, 0)
+                #self.wait_for_trigger(trigger_path)
+                #self.update_progress_log(f"Command sent:{command}")
+            return True
+        except Exception as e:
+            logger.error(f"Error triggering command {command}: {e}")
+            return False
+
+    def wait_for_trigger(self, trigger_path, maxwait = 60.0):
+        timer = 0
+        try:
+            while timer < maxwait:
+                # This processes all pending IPC and UI events
+                win32gui.PumpWaitingMessages()
+                #QApplication.processEvents() 
+                if os.path.exists(trigger_path): 
+                    os.remove(trigger_path)
+                    return
+                else: time.sleep(1)
+                timer += 1
+            return    
+        except Exception as e:
+            logger.error(f"Waiting for PostMessage {e}")
 
     def trigger_phase_macro(self, phase_number: int):
         """Target execution logic for your captured Phase Hotkeys"""
         tray_hwnd = win32gui.FindWindow("VFEEngineTrayClass", "VFE Tray Engine")
+        if phase_number > len(self.flight_plan.current_plan.phases):
+            return
         if tray_hwnd:
             # Check correct waypoint selector - 0
-            if self.ocr_available == True:
-                detected_digit = self.wp_tracker.capture_and_ocr_digit(self.ui_instance)
-                if detected_digit in range(10) and detected_digit == 0:
-                    self.update_progress_log(f"✅ Waypoint selector set to 0")
-                elif detected_digit != 0:
-                    self.update_progress_log(f"⚠️ Waypoint selector digit set to {detected_digit}")
-                else: 
-                    self.update_progress_log(f"⚠️ Waypoint selector digit not OCR readable")
+            if self.ocr_available == True and self.ocr_functional == True:
+                self.reset_waypoint_selector(False)                
+                detected_digit = self.check_waypoint_selector(True, False)
+            else: 
+                self.update_progress_log(f"VFE: No OCR, manual waypoint selection.")
 
             # Signal WM_VFE_EXECUTE_PHASE (WM_USER + 10)
             win32gui.PostMessage(tray_hwnd, win32con.WM_USER + 10, phase_number, 0)
-            self.update_progress_log(f"VFE: Phase {phase_number} macro stream dispatched to background core.")
+            self.update_progress_log(f"VFE: Phase {phase_number} macro stream dispatched.")
 
     def trigger_waypoint_info(self, phase_number: int):
         """Target execution logic for your captured Waypoint Dialogue Hotkeys"""
@@ -858,8 +1075,8 @@ class CIVAFlightPlanUI(QMainWindow):
                     os.remove(msg_json_path)
 
                     msgData = data.copy()       #DEFAULT_INLINE_MSG.copy()
-                    msgData["html"]     = f"<p> style='font-size: 12pt;'> {msgData["html"]} </p>"
-
+                    #msgData["html"]     = f"<p> style='font-size: 12pt;'> {msgData["html"]} </p>"
+                    logger.info(msgData["html"])
                     #self.render_inline_macro_msg(data)
                     # FIX: Broadcast via signal instead of running the layout function directly
                     self.request_inline_msg_ui.emit(msgData)
@@ -891,7 +1108,7 @@ class CIVAFlightPlanUI(QMainWindow):
             height = int(screen_geo.height() * (data["h_pct"] / 100.0))
             self.current_inline_dialogue.setFixedSize(width, height)
             self.current_inline_dialogue.move(data["x"], data["y"])
-            if gLogging: logger.info(f"Inline dialogue size: {data["x"]}, {data["y"]}")            
+            if gLogging or True: logger.info(f"Inline dialogue size: {data["x"]}, {data["y"]}")            
 
             # Apply top-level overlay window flags
             if gLogging: logger.info(f"Inline dialogue ontop: {data["ontop"]}")            
@@ -906,13 +1123,21 @@ class CIVAFlightPlanUI(QMainWindow):
             
             # Inject the HTML formatting safely
             html_payload = data["html"].replace("%_vQuoteChar%", '"')
+            # <msg>(100,100,"WP: EGLL Pos: N51° 28' 39.00 W0° 27' 41.00","World pos tag",0,10,0,0,20%,10%)
+            #html_payload = data["html"].replace("'", "")
+
             # wrap text in size element
             #<p style="font-size: 1rem;">  This is simple body text. </p>
-            if data["style"] != "":
-                html_payload = f"<p style='{data["style"]}'> {html_payload} </p> "
+            # style embedding in simple dialogue needs DEBUG
+            if "style" and False in data:
+                # use default template
+                dstyle = data["style"]
+                logger.info(dstyle) 
+                html_payload = f"<p style='{dstyle}'> {html_payload} </p> "
             else:             
-                html_payload = f"<p style='font-size: 1rem;'> {html_payload} </p> "
-            if gLogging: logger.info(html_payload)   
+                #html_payload = f"<p style='font-size: 1rem;'> {html_payload} </p> "
+                html_payload = f"{html_payload}"
+            if gLogging or True: logger.info(html_payload)   
 
             browser.setHtml(html_payload)
             layout.addWidget(browser)
@@ -943,20 +1168,59 @@ class CIVAFlightPlanUI(QMainWindow):
 
         """Launches a non-blocking overlay framework containing raw layout streams."""
         
-        dialogue = wplistDialog(title, self.msg_html_waypoints[phase_number - 1],
+        self.WPdialogue = wplistDialog(title, self.msg_html_waypoints[phase_number - 1],
                                 w_pct, h_pct
                                 )
     
         #dialogue.setFixedSize(480, 320)
         # Set orientation position
-        dialogue.move(200, 200)
+        self.WPdialogue.move(200, 200)
 
         # USE EXEC_ FOR PERSISTENCE: 
         # .exec_() halts execution on this thread and keeps the window open 
         # explicitly until the user clicks 'OK' or presses Esc. 
         # (Unlike .show(), it won't vanish or timeout automatically)
 
-        dialogue.exec_() # Launches safe dialog loop execution tree
+        #self.WPdialogue.exec_() # Launches safe dialog loop execution tree
+        self.WPdialogue.show() # Launches safe dialog loop execution tree
+
+    # Inside your main window class:
+
+    def toggle_html_waypoint_dialogue(self, phase_number):
+        # 1. If it exists and is visible, destroy it
+        if hasattr(self, 'WPdialogue') and self.WPdialogue is not None:
+             if self.WPdialogue.isVisible():
+                self.WPdialogue.deleteLater()
+                # Note: self.dialInstance becomes None via the cleanup method below
+                return
+        w_pct = 20
+        h_pct = 40  
+        title = f"VFE Waypoint Summary - Phase {phase_number}"
+        """Launches a non-blocking overlay framework containing raw layout streams."""
+        # 2. Otherwise, recreate and display it  
+        if len(self.msg_html_waypoints) < phase_number:
+            return      
+        self.WPdialogue = wplistDialog(title, self.msg_html_waypoints[phase_number - 1],
+                                w_pct, h_pct
+                                )
+        self.WPdialogue.phase = phase_number
+        # Enable automatic memory cleanup on close
+        self.WPdialogue.setAttribute(Qt.WA_DeleteOnClose)
+        
+        # Clear the reference when destroyed (handles X button or deleteLater)
+        self.WPdialogue.destroyed.connect(self._cleanup_dialog_reference)
+        
+        #dialogue.setFixedSize(480, 320)
+        # Set orientation position
+        self.WPdialogue.move(200, 200)
+        
+        # Show it modelessly
+        self.WPdialogue.show()
+
+    def _cleanup_dialog_reference(self):
+        """Safely resets the variable to None when Qt deletes the widget."""
+        self.WPdialogue = None
+
 
     
     def show_html_waypoint_dialogueOrig(self, phase_number):
@@ -1044,6 +1308,9 @@ class CIVAFlightPlanUI(QMainWindow):
     def capture_hotkey(self):
         # --- NEW: PURGE BUFFER ---
         # 1. Clear any stuck keys or ghosting events in the library
+        restore_armed = self.hotkeymgr._is_armed
+        if LOWLEVEL_HK and restore_armed: 
+            self.hotkeymgr.disarm()     # stop low level trap
         global_kb.stash_state() 
         
         # 2. Force wait for all physical keys to be UP
@@ -1054,6 +1321,8 @@ class CIVAFlightPlanUI(QMainWindow):
         # Capture the full hotkey string
         # suppress=True prevents the key from 'typing' into Windows
         hotkey = global_kb.read_hotkey(suppress=True)
+        if LOWLEVEL_HK and restore_armed: 
+            self.hotkeymgr.arm()        
         return hotkey
 
     def initUI(self):
@@ -1146,11 +1415,15 @@ class CIVAFlightPlanUI(QMainWindow):
         self.sim_check_timer.start(5000)
         # Track status to avoid spamming the log
         self.sim_was_running = False
+        self.is_sim_running = False
+        self.sim_taxi = False
         self.simconnect_was_running = False
-
         
         # Import existing defined flight plan file on start...
         self.load_flight_plan_import(self.loaded_flight_plan)
+
+        #FP tracking WP
+        self.next_wp_tracking = ""
         
     def create_group1_load_flightplan(self):
         """
@@ -1373,7 +1646,7 @@ class CIVAFlightPlanUI(QMainWindow):
         
         # Connection check button
         check_layout = QHBoxLayout()
-        btn_check_conn = QPushButton("Check Simconnect Connection")
+        btn_check_conn = QPushButton("Test Simconnect Connection and Calibration")
         btn_check_conn.clicked.connect(self.on_check_simconnect)
         check_layout.addWidget(btn_check_conn)
         
@@ -1392,7 +1665,7 @@ class CIVAFlightPlanUI(QMainWindow):
         # Exit button
         btn_exit = QPushButton("Exit Application")
         btn_exit.clicked.connect(self.on_exit_app)
-        btn_exit.setStyleSheet("background-color: #ff6b6b; color: white; padding: 8px;")
+        #btn_exit.setStyleSheet("background-color: Gray; color: white; padding: 8px;")
         
         layout.addLayout(check_layout)
         layout.addLayout(status_layout)
@@ -1453,25 +1726,35 @@ class CIVAFlightPlanUI(QMainWindow):
 
     def check_sim_status(self):
         target_exe = "FlightSimulator2024.exe"
-        is_running = is_process_running(target_exe) # Using the psutil function
-
-        if is_running and not self.sim_was_running:
+        self.is_sim_running = is_process_running(target_exe) # Using the psutil function
+        is_simconnect_running = False
+        if self.is_sim_running and not self.sim_was_running:
             self.update_progress_log(f"🎮 {target_exe} detected. Ready to Arm.")
             self.lbl_msfs_status.setText("MSFS status: Running")
             self.lbl_msfs_status.setStyleSheet("color: lime;")
             self.sim_was_running = True
+            set_focus_by_exe("FlightSimulator2024.exe", self)           
+            #self.simconnect.flightLoaded = False            
             
-        elif not is_running and self.sim_was_running:
+        elif not self.is_sim_running and self.sim_was_running:
+            self.simconnect.flightLoaded = False
+            self.simconnect.flightActive = False
             self.update_progress_log(f"❌ {target_exe} closed. Hotkeys disarmed.")
             self.lbl_msfs_status.setText("SIM STATUS: NOT FOUND")
             self.lbl_msfs_status.setStyleSheet("color: red;")
             self.sim_was_running = False
             # Safety: Disarm keys if sim closes
-            global_kb.unhook_all() 
+            if not LOWLEVEL_HK: global_kb.unhook_all() 
+            else:
+                self.hotkeymgr.disarm()
+
+        # wait for simconnect avail
+        #self.update_simconnect_status()
 
     # ========================================================================
     # CALLBACK FUNCTIONS
     # ========================================================================
+    # region CALLBACK FUNCTIONS
     def on_phase_triggered(self, phase_num):
         if not self.macro_lock.acquire(blocking=False):
             self.worker.status_changed.emit(f"VFE: Macro already running.")
@@ -1512,7 +1795,7 @@ class CIVAFlightPlanUI(QMainWindow):
                 self.txt_filename.setText(filename)
                 # QMessageBox.information(self, "Flight Plan Loaded", f"Loaded: {filename}")
                 # TODO: Parse and process flight plan here
-                self.flight_plan.current_plan = load_flight_plan_file(self, file_path)
+                self.flight_plan.current_plan = self.load_flight_plan_file(file_path)
                 fp = self.flight_plan.current_plan
                 if fp:
                     self.update_progress_log("")
@@ -1520,6 +1803,30 @@ class CIVAFlightPlanUI(QMainWindow):
             else:        
                 self.update_progress_log(f"❌ Existing file not found: {file_path}")
                 
+    def load_flight_plan_file(self, file_path: str) -> Dict[str, Any]:
+        """Load a flight plan file."""
+        try:
+            plan = self.flight_plan.load_flight_plan(file_path)
+            plan.summary =  {
+                "success": True,
+                "departure": plan.departure,
+                "destination": plan.destination,
+                "phases": [
+                    {
+                        "number": p.number,
+                        "from": p.from_icao,
+                        "to": p.to_icao,
+                        "waypoint_count": len(p.waypoints)
+                    }
+                    for p in plan.phases
+                ],
+                "total_waypoints": sum(len(p.waypoints) for p in plan.phases)
+            }
+            return plan
+        except Exception as e:
+            logger.error(f"Failed to load flight plan: {e}")
+            return {"success": False, "error": str(e)}
+    
     def on_process_flight_plan(self):
         """Handle process Flight Plan button click."""
         # TODO: Parse and process flight plan here
@@ -1530,7 +1837,72 @@ class CIVAFlightPlanUI(QMainWindow):
             #hotkey arm            
             self.flight_plan.bind_all_sequences()
             self.update_progress_log(f"✅ Armed hotkeys for MSFS load")  # Clear log"")
-            self.update_progress_log(f"⚠️ Ensure waypoint selector on 0 before phase load.")  # Clear log"")
+            #self.update_progress_log(f"⚠️ Ensure waypoint selector on 0 before phase load.")  # Clear log"")
+            
+    def reset_waypoint_selector(self, isTest=False):
+        #-------------debug check selector... --------------
+        #1. get calibration <waypoint selector> and move cursor to "clear"
+        #   to leave the selector with clean display
+        # reset selector to 0
+        try:
+            # set automan to auto (default forward scroll)
+            #works when hotkey triggered, fails on test click
+            if isTest: 
+                amOk = self.trigger_gen_macro(["clear", "automan"])
+                #self.update_progress_log (f"AutoMan set: {amOk}")
+            if self.ocr_available:
+                cd = self.flight_plan.calibration_data 
+                button_name="waypoint selector"
+                clear = cd.get("clear", [])
+                btn = cd.get(button_name, [])
+                commands = []
+                commands.extend(btn)
+                commands.extend(clear)       # just do the move to clear btn
+                d1,d2 = self.trigger_wyptsel_macros(0, commands, isTest)
+                #set undefined digits to large numbers to suit quickest reset calc
+                if d1 == None: 
+                    d1 = 100
+                if d2 == None: 
+                    d2 = 100
+                if d1 == 100 and d2 == 100:
+                    self.ocr_functional = False
+                    self.update_progress_log (f"⚠️ OCR disabled - may be due to panel lighting")    
+                    self.update_progress_log (f" Click and complete 'Check Simconnect and Cal..' to retry")
+                else:
+                    if d1 < d2 and d1 <= 5:
+                        delta = -1 * (d1 + 1)
+                    elif d1 < d2 and d1 > 5:
+                        delta = 10 - (d1 + 1)
+                    elif d2 < d1 and d2 <= 5:
+                        delta = -1 * (d2 + 0)
+                    else: # d2 > 5
+                        delta = 10 - d2
+                    # move waypoint selector by delta steps!
+                    if isTest:
+                        self.update_progress_log (f"VFE {d1} {d2} delta {delta}")
+                    if delta == 0: return False
+                    # reset
+                    cmd = []
+                    cmd.append("clear")
+                    button_name="waypoint selector"
+                    if delta < 0: button_name="waypoint selector back"
+                    for i in range (1, abs(delta) + 1):
+                        cmd.append(button_name)
+                    # restore selector
+                    self.trigger_gen_macro(cmd)  
+                    self.ocr_functional = True
+                    if isTest:
+                        self.update_progress_log (f"✅ OCR functional: Waypoint selector will be set")
+                    return True
+
+            elif isTest:  
+                self.update_progress_log (f"OCR not available")
+                return False
+            #based on current selection, restore to zero
+            #self.check_waypoint_selector()
+        except Exception as e:
+            logging.info(f"Detect waypoint pos: {e}")
+            return False
 
     def on_capture_phase_hotkey(self):
         """Handle Capture Phase Hotkey button click"""
@@ -1560,7 +1932,7 @@ class CIVAFlightPlanUI(QMainWindow):
         self.settings["global_wait"]  = self.global_wait
         self.settings["phase_hotkey"] = self.phase_hotkey
 
-
+    # phase list of waypoint details
     def on_capture_waypoint_hotkey(self):
         self.btn_record_waypoint.setEnabled(False)
         self.lbl_waypoint_capture_status.setText("Recording... (e.g. Ctrl+Shift+F1)")
@@ -1632,6 +2004,10 @@ class CIVAFlightPlanUI(QMainWindow):
             self.update_progress_log("Calibration completed successfully!")
             if gLogging: logger.info("Calibration completed and file saved.")
         
+            #reconnect fp object, for immediate use
+            if self.automation.load_calibration():
+                self.update_progress_log("Updated calibration data live.")
+        
             # Define the exact window coordinates of INS display box
             # save waypoint selector scrn loc in settings..
             self.settings["waypoint_sel_loc"] = {}
@@ -1639,11 +2015,7 @@ class CIVAFlightPlanUI(QMainWindow):
             self.settings["waypoint_sel_loc"]["scn_y"] = self.waypoint_sel_y
             self.save_settings(self.settings)
 
-            detected_digit = self.wp_tracker.capture_and_ocr_digit(self.ui_instance)
-            if detected_digit in range(10):
-                self.update_progress_log(f"✅ Waypoint selector digit check: {detected_digit}")
-            else: 
-                self.update_progress_log(f"⚠️ Waypoint selector digit not OCR readable")
+            detected_digit = self.check_waypoint_selector(True, False)
 
         else:
             self.calibration_status = False
@@ -1652,31 +2024,66 @@ class CIVAFlightPlanUI(QMainWindow):
             QMessageBox.warning(self, "Calibration Failed", "Calibration file was not created.")
             logger.warning("Calibration script ran but no calibration file was created.")
     
-    def on_check_simconnect(self):
+    def check_waypoint_selector (self, doUpd, isTest):
+        detected_digit = self.wp_tracker.capture_and_ocr_digit(self.ui_instance, isTest)
+        if not doUpd: return detected_digit
+        if detected_digit in range(10) and detected_digit == 0:
+            self.update_progress_log(f"✅ Waypoint selector set to 0")
+        elif detected_digit != 0:
+            self.update_progress_log(f"⚠️ Waypoint selector digit set to {detected_digit}")
+        else: 
+            self.update_progress_log(f"⚠️ Waypoint selector digit not OCR readable")
+        return detected_digit
+
+    def on_check_simconnect(self, userClick = False):
         """Handle Check Simconnect Connection button click."""
         # TODO: Implement Simconnect connection check
         try:
-            is_running = self.simconnect.connect() # Using the psutil function
+            #check msfs status
+            logger.info(f"check_simconnect wasrun:{self.simconnect_was_running}")
+            if self.is_sim_running:
+                self.update_progress_log("")
+                is_running = self.simconnect.connect() # Using the psutil function
+                logger.info(f"check_simconnect run:{is_running} wasrun:{self.simconnect_was_running}")
+                if is_running and not self.simconnect_was_running:
+                    self.update_progress_log(f"🎮 SimConnect available.")
+                    self.lbl_simconnect_status.setText("SimConnect: Running")
+                    self.lbl_simconnect_status.setStyleSheet("color: lime;")
+                    self.simconnect_was_running = True
+                elif not is_running and self.simconnect_was_running:
+                    self.update_progress_log(f"❌ SimConnect lost.")
+                    self.lbl_simconnect_status.setText("SimConnect: Disconnected")
+                    self.lbl_simconnect_status.setStyleSheet("color: red;")
+                    self.simconnect_was_running = False
+                if is_running:
+                    scData = self.simconnect.get_aircraft_data()
+                    if scData and self.simconnect.flightActive:
+                        if gLogging: logger.info(f"Simconnect Check: alt:{scData["alt"]}; gspd:{scData["spd"]}; lat:{scData["lat"]}; lng:{scData["lng"]} ")
+                        self.update_telemetry("","",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
 
-            if is_running and not self.simconnect_was_running:
-                self.update_progress_log(f"🎮 SimConnect available.")
-                self.lbl_simconnect_status.setText("SimConnect: Running")
-                self.lbl_simconnect_status.setStyleSheet("color: lime;")
-                self.simconnect_was_running = True
-            elif not is_running and self.simconnect_was_running:
-                self.update_progress_log(f"❌ SimConnect lost.")
-                self.lbl_simconnect_status.setText("SimConnect: Disconnected")
-                self.lbl_simconnect_status.setStyleSheet("color: red;")
-                self.simconnect_was_running = False
-            if is_running:
-                scData = self.simconnect.get_aircraft_data()
-                if scData:
-                    if gLogging: logger.info(f"Simconnect Check: alt:{scData["alt"]}; gspd:{scData["spd"]}; lat:{scData["lat"]}; lng:{scData["lng"]} ")
-                    self.update_telemetry("","",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
+                        if gLogging: logger.info(scData.keys()) 
+                                                   
+                else:
+                    self.update_progress_log(f"❌ Simconnect connection failed.")
+                    logger.info("Simconnect connection failed")
 
-                    if gLogging: logger.info(scData.keys())                                
-            else:
-                logger.info("Simconnect connection failed")
+                # check waypoint calibration...
+                response = QMessageBox.question(
+                    self,
+                    'Test Calibration',
+                    'This will run a test of waypoint selector location and adjustment.\n'
+                    'If the waypoint selector cursor position doesnt centre on the digit,'
+                    'you may need to rerun the calibration.'
+                    'If you have OCR installed, a test image will be saved in the ocr_debug app folder.'
+                    'Detecting the digit allows VFE to reset to zero prior to phase load.'
+                    'Ensure MSFS is running and zoomed to your standard view of CIVA unit.\nContinue?'
+                )
+                if response != QMessageBox.Yes:
+                    return            
+                self.reset_waypoint_selector(True)
+                self.update_progress_log("--Test Complete--")
+            elif userClick:
+                self.update_progress_log("Sim not running")    
         except Exception as e:
             logger.error(f"Failed to SimConnect: {e}")
     
@@ -1699,7 +2106,7 @@ class CIVAFlightPlanUI(QMainWindow):
             except:
                 pass
             self.close()
-
+    #endregion
     # ========================================================================
     # UI UPDATE FUNCTIONS
     # ========================================================================
@@ -1747,7 +2154,7 @@ class CIVAFlightPlanUI(QMainWindow):
 
     def update_msfs_status(self, running: bool):
         """Update MSFS running status indicator."""
-        self.msfs_running = running
+        self.is_sim_running = running
         if running:
             self.lbl_msfs_status.setText("MSFS: Running")
             self.lbl_msfs_status.setStyleSheet("background-color: green; padding: 5px; border-radius: 3px; color: white;")
@@ -1755,25 +2162,33 @@ class CIVAFlightPlanUI(QMainWindow):
             self.lbl_msfs_status.setText("MSFS: Not Running")
             self.lbl_msfs_status.setStyleSheet("background-color: red; padding: 5px; border-radius: 3px; color: white;")
     
-    def update_simconnect_status(self, connected: bool):
+    def update_simconnect_status(self):
         """Update Simconnect connection status indicator."""
-        self.simconnect_connected = connected
-        if connected:
-            self.lbl_simconnect_status.setText("Simconnect: Connected")
+        flStatus = False
+        if self.simconnect: 
+            flStatus = self.simconnect.flightLoaded        
+            flActive = self.simconnect.flightActive          
+        #    logger.info(f"updt simcon {flStatus} {flActive}")
+        if flActive:
+            self.lbl_simconnect_status.setText("Simconnect: Flight active")
             self.lbl_simconnect_status.setStyleSheet("background-color: green; padding: 5px; border-radius: 3px; color: white;")
+        elif flStatus :
+            self.lbl_simconnect_status.setText("Simconnect: Flight loaded")
+            self.lbl_simconnect_status.setStyleSheet("background-color: green; padding: 5px; border-radius: 3px; color: white;")
+        elif self.simconnect.connected:
+            self.lbl_simconnect_status.setText("Simconnect: Connected")
+            self.lbl_simconnect_status.setStyleSheet("background-color: orangered; padding: 5px; border-radius: 3px; color: white;")
         else:
             self.lbl_simconnect_status.setText("Simconnect: Disconnected")
             self.lbl_simconnect_status.setStyleSheet("background-color: red; padding: 5px; border-radius: 3px; color: white;")
     
     def update_telemetry(self, ins_waypoint="--", heading="--", altitude="--", groundspeed="--", lat="--", lng="--"):
         """Update telemetry display fields."""
-        if self.teleticker == True: 
-            tick = f"🟢"
-            self.teleticker = False
-        else: 
-            tick = ""
-            self.teleticker = True
-        self.lbl_ins_waypoint.setText(f"{tick} INS Next Waypoint: {ins_waypoint}")
+
+        nxtwp = "Next waypoint: --"
+        if ins_waypoint != "--": nxtwp = ins_waypoint
+            # self.lbl_ins_waypoint.setText(f"{tick} INS Next Waypoint: <p style='font-size:10pt'>{ins_waypoint}<p>")
+        self.lbl_ins_waypoint.setText(f"{nxtwp}")
         #self.lbl_current_heading.setText(f"Current Heading: {heading} °")
         self.lbl_current_altitude.setText(f"Current Altitude: {altitude} ft")
         self.lbl_ground_speed.setText(f"Ground Speed: {groundspeed} kts")
@@ -1792,26 +2207,58 @@ class CIVAFlightPlanUI(QMainWindow):
     def poll_simconnect_data(self):
         """Poll Simconnect for telemetry data (framework placeholder)."""
         try:
-            if self.simconnect.connected:
+            #logger.info(f"poll simconnect0 sim:{self.is_sim_running} cnctd:{self.simconnect.connected}")
+            if not self.simconnect.connected:
+                self.simconnect.connect()
+            #    logger.info(f"simcon connected sim:{self.is_sim_running} cnctd:{self.simconnect.connected}")
+            if self.is_sim_running and self.simconnect.connected:
                 scData = self.simconnect.get_aircraft_data()
-                if scData:
+            #    logger.info(f"simcon :{scData}")
+
+                if scData and not self.simconnect.flightLoaded:
+                    self.simconnect.flightLoaded = True
+            #        logger.info(f"Flight loaded")
+                elif scData and self.simconnect.flightLoaded:
                     # logger.info(f"Simconnect Check: alt:{scData["alt"]}; gspd:{scData["spd"]}; lat:{scData["lat"]}; lng:{scData["lng"]} ")
-                    self.update_telemetry("","",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
+            #        logger.info(f"update telemetry")
+
+                    self.update_telemetry(self.next_wp_tracking,"",scData["alt"],scData["spd"], scData["lat"], scData["lng"] )
+                    #self.simconnect.flightLoaded = True
                     #logger.info(scData.keys())
                     #timer cycle 10 secs: Check progress against next phase and waypoint..
-                    if scData["spd"] > 50 or True:
+                    if scData["spd"] > 50 or True:      #!!
                         # check current phase wps
-                        self.checkPhaseProgress(scData["lat"], scData["lng"] )
+                        self.checkPhaseProgress(scData["lat"], scData["lng"], scData["spd"] )
+                    
+                self.update_simconnect_status()
+            
             else:
                 pass
-        except:     # waiting for connection
-            pass
+        except Exception as e:     # waiting for connection
+            logger.error(f"Check simconnect:{e}")
 
-    def checkPhaseProgress(self,curLat, curLng ):
+    def checkPhaseProgress(self, curLat, curLng, gspeed ):
         fp = self.flight_plan.current_plan  
                 #....phases[0].waypoints[0].altitude
         navstatus = []
         phx = 1
+        nxtid = 0
+        mindis = 100000.0    
+        # Check current location against each phase    
+        # Determine:
+        # 1. Current phase if within a leg (Green blob status)
+        # 2. Next phase if approaching first point (Yellow blob status)
+        # 3. Off plan if outside leg by more than 10nm (Warning)
+        # 4. Off plan if next waypoint distance increasing
+
+        # Flag -1 or 1: Outside MBR or not matched inside any vector bounds
+        # return distance to closest of first and last point
+        # CP = possible aircraft location
+        #  CP0>   |---+---CP1>---phse1---+----|-----+---phs2----|---lastphs--|  CP4> 
+        #                                       CP2>
+        #                           CP3>       
+
+
         for phase in fp.phases:
             # no assumption on what phase is loaded to device
             # just use current location to determine phase:wpfrom-wpto
@@ -1824,6 +2271,7 @@ class CIVAFlightPlanUI(QMainWindow):
 
             curloc = [curLat,curLng]
             coords = []
+
             for wp in wps:
                 coords.append(SimpleNamespace(latitude=wp.latitude, longitude=wp.longitude))
 
@@ -1833,11 +2281,28 @@ class CIVAFlightPlanUI(QMainWindow):
             #     'from_idx': int:0-nwp-1 or None,
             #     'to_idx': int or None,
             #     'dist_to_to_pt_nm': float,
-            #     'leg_length_nm': float
+            #     'leg_length_nm': float,
+            #     'track_offset': min_perp_dist
             # }
             navstatus.append (track_current_phase(coords, curloc))
             i = len(navstatus)
             nvs = navstatus[i-1]
+            # capture this phase if target
+            if nvs["flag"] == 0 or \
+            (nvs["flag"] != 0 and round(nvs["dist_to_to_pt_nm"]) < mindis):
+                nxtphs = phase.number
+                nxtid = nvs["to_idx"]
+                nxtflg = nvs["flag"]    # -1, 0, 1
+                nxtnm = wps[nxtid].name
+                nxtdis = round(nvs["dist_to_to_pt_nm"])
+                nxtoff = round(nvs["track_offset"])
+                mindis = nxtdis
+                if nxtflg == 0:
+                    tick = "🟢"
+                    if nxtoff > 5: tick = "❗"
+                elif nxtflg == -1: tick = "🟠"
+                elif nxtflg == 1: tick = "⚠️"
+        
             if gLogging: logger.info (f"for phase {i}: {nvs}")
             # Check for next phase load based on current location
             # 1. flag = 0 for this phase being active
@@ -1849,22 +2314,34 @@ class CIVAFlightPlanUI(QMainWindow):
             ##TESTING
             #nvs["to_idx"] = nwp - 1
             #nvs["dist_to_to_pt_nm"] = 2
-
-            if nvs["flag"] == 0 and nvs["to_idx"] + 1 == nwp and \
+            if False:
+                if  \
+                nvs["flag"] == 0 and \
+                nvs["to_idx"] + 1 == nwp and \
                 nvs["dist_to_to_pt_nm"] < self.lastwpinfo_dist and \
-                    self.lastwpwarn_clear == False:
-                msgData = DEFAULT_INLINE_MSG.copy()
-                msgData["html"]     = "⚠️: Approaching last waypoint"
-                msgData["timeout"]  = 60
-                if nvs["dist_to_to_pt_nm"] < self.lastwpwarn_dist:
-                    msgData["html"] = "❗: At last waypoint. Load next phase"
-                    self.lastwpwarn_clear = True
+                not self.lastwpwarn_clear:
 
-                # FIX: Broadcast via signal instead of running the layout function directly
-                self.request_inline_msg_ui.emit(msgData)
-                #self.render_inline_macro_msg(msgData)
+                    msgData = DEFAULT_INLINE_MSG.copy()
+                    msgData["html"]     = "⚠️: Approaching last waypoint"
+                    msgData["timeout"]  = 10
+                    if nvs["dist_to_to_pt_nm"] < self.lastwpwarn_dist:
+                        msgData["html"] = "❗: At last waypoint. Load next phase"
+                        self.lastwpwarn_clear = True
+
+                    # FIX: Broadcast via signal instead of running the layout function directly
+                    # v1.0.1 drop dialogue for waypoint telemetry update
+                    # self.request_inline_msg_ui.emit(msgData)
+                    #self.render_inline_macro_msg(msgData)
             # next phase...
             phx += 1
+        
+        #output next waypoint or last if past end
+        if gspeed > 0 or self.sim_taxi:
+            self.sim_taxi = True
+            self.next_wp_tracking = f"{tick} Next: <b>{nxtid}; {nxtnm}</b>; phs: <b>{nxtphs}</b> dis: <b>{nxtdis}</b> nm offset: <b>{nxtoff}</b> nm"
+        else:
+            tick = "🟠"
+            self.next_wp_tracking = f"{tick} pre-flight"
 
 
     def normalize_hotkey(self, hotkey_str):
@@ -1891,97 +2368,9 @@ class CIVAFlightPlanUI(QMainWindow):
         # 3. Join back together
         return "+".join(new_parts)
  
-    #endregion
+    #endregion UI UPDATE FUNCTIONS
 
-# ========================================================================
-# Action phase listener and processor (hotkey triggered)
-# ========================================================================
-# def start_phase_listener(ui_instance):
-#     # current phase
-#     phaseix = 0
-#     state = {"index": 0}
-#     stateMsg = {"index": 0}
-#     total = len(ui_instance.generated_phases)
-#     key_stub = re.sub(r'\+[1-9]', '', ui_instance.chosen_key)
-#     # Renamed to be generic
-#     def on_hotkey_pressed(event):
-#         if state["index"] < total:
-#             try:
-#                 file_path = ui_instance.generated_phases[state["index"]]
-#                 with open(file_path, 'r') as f:
-#                     pyperclip.copy(f.read())
-                
-#                 state["index"] += 1
-#                 logger.info(f"-> [{state['index']}/{total}] COPIED: {os.path.basename(file_path)}")
-#                 winsound.Beep(1000, 100)
-#             except Exception as e:
-#                 logger.error(f"Error: {e}")
-#         else:
-#             # change color on CMD window:
-#             if stateMsg["index"] == 0:
-#                 #os.system('color 0A')
-#                 #logger.info("\n" + "="*50)            
-#                 #logger.info(" Starting waypoint details Message set (ESC to exit)")
-#                 #logger.info(" Tab to Macro Commander macro edit window for 'Waypoints 1' \n and hit F9 to copy first file")             
-#                 pass         
 
-#             if stateMsg["index"] < total:
-#                 try:
-#                     file_path = ui_instance.generated_WPmsg[stateMsg["index"]]
-                    
-#                     #ui_instance.select_phase(state["index"] + 1) #data.get("phase"))
-#                     ui_instance.load_phase_to_civa(ui_instance, ui_instance.current_phase)
-
-#                     stateMsg["index"] += 1
-#                     logger.info(f"-> [{stateMsg['index']}/{total}] COPIED: {os.path.basename(file_path)}")
-#                     winsound.Beep(1000, 100)
-#                 except Exception as e:
-#                     logger.error(f"Error: {e}")
-#             else:
-#                 logger.info("All phases completed! Press ESC to exit.")
-#                 winsound.Beep(600, 150)
-#                 #os.system('color 07')
-
-#     # listen to each phase hotkey
-#     for phaseix in ui_instance.generated_phases:
-#         activ_key = key_stub + "+" + str(phaseix + 1)
-#         global_kb.on_press_key(activ_key, on_hotkey_pressed)
-
-#     # The "Keep-Alive" loop
-#     try:
-#         while True:
-#             if global_kb.is_pressed('esc'):
-#                 logger.info("ESC detected. Exiting phase listener.")
-#                 break
-#             time.sleep(1.0) # A longer sleep is fine and saves Windows resources
-#     finally:
-#         #global_kb.unhook_all()
-#         #os.system('color 07')
-#         logger.info("\n[ESC] detected. Hotkeys retained.")
-
-def load_flight_plan_file(self, file_path: str) -> Dict[str, Any]:
-    """Load a flight plan file."""
-    try:
-        plan = self.flight_plan.load_flight_plan(file_path)
-        plan.summary =  {
-            "success": True,
-            "departure": plan.departure,
-            "destination": plan.destination,
-            "phases": [
-                {
-                    "number": p.number,
-                    "from": p.from_icao,
-                    "to": p.to_icao,
-                    "waypoint_count": len(p.waypoints)
-                }
-                for p in plan.phases
-            ],
-            "total_waypoints": sum(len(p.waypoints) for p in plan.phases)
-        }
-        return plan
-    except Exception as e:
-        logger.error(f"Failed to load flight plan: {e}")
-        return {"success": False, "error": str(e)}
 
 def select_phase(self, phase_num: int) -> Dict[str, Any]:
     """Select a phase to display."""
@@ -2020,53 +2409,7 @@ def select_phase(self, phase_num: int) -> Dict[str, Any]:
         "waypoints": waypoints
     }
 
-def load_phase_to_civa(self, phase_num: int) -> Dict[str, Any]:
-    """
-    Load a phase to CIVA INS using automation.
-    This replaces the Macro Commander macro execution.
-    """
-    #if not self.flight_plan.waypoints:
-    #    return {"success": False, "error": "No flight plan loaded"}
-    try:
-        if self.ui.is_loading:
-            return {"success": False, "error": "Loading already in progress"}
-        
-        phase = self.ui.flight_plan.current_plan.phases[phase_num - 1]
-        self.ui.is_loading = True
-        self.ui.worker.isRunning = True
-        set_focus_by_exe("FlightSimulator2024.exe", self.ui)
 
-        # Set data selector to WAY PT
-        self.ui.automation.set_data_selector("WAY PT")
-        #Set auto-man selector to AUTO
-        self.push_button("automan")
-
-        if gLogging: 
-            if gLogging: logger.info("Set data selector to WAY PT")
-            self.status_changed.emit(f"Set data selector to WAY PT")
-        set_focus_instant(self.ui)      # Enter each waypoint
-        for wp in phase.waypoints:
-            #self.status_changed.emit(f"Waypoint loading {wp.name}.")
-            if not self.ui.automation.enter_waypoint(wp):
-                # interrupted
-                return {
-                    "success": False,
-                    "message": f"Interrupted at {wp.name} "
-                }
-            wp.loaded = True
-
-        self.status_changed.emit(f"Completed waypoint loading for Phase {phase_num}.")
-        self.lastwpwarn_clear = False       # arm next warning
-       
-        return {
-            "success": True,
-            "message": f"Phase {phase_num} loaded ({len(phase.waypoints)} waypoints)"
-        }
-    except Exception as e:
-        logger.error(f"Phase load error: {e}")
-        return {"success": False, "error": str(e)}
-    finally:
-        self.ui.is_loading = False
 
 def get_state(self) -> Dict[str, Any]:
     """Get current application state for UI."""
@@ -2127,8 +2470,10 @@ class CivaButtonPusher:
                         elif current_button:
                             self.fp.calibration_data[current_button].append(clean_line)
                 self.ui.update_progress_log(f"Loaded calibration: {len(self.fp.calibration_data)} buttons")
+                return True
             except Exception as e:
                 logger.error(f"Failed to load calibration: {e}")
+        return False
     
     def push_button(self, name: str):
         """
@@ -2289,8 +2634,9 @@ class CivaButtonPusher:
             return cardinal + str(degrees).zfill(3) + str(minutes).zfill(2) + str(seconds_digit)
 
 # ============================================================================
-# UTILITY FUNCTIONS - Original CIVA Processing
+# UTILITY FUNCTIONS
 # ============================================================================
+# region UTILITY FUNCTIONS
 def is_process_running(exe_name):
     """Check if there is any running process that contains the given name."""
     for proc in psutil.process_iter(['name']):
@@ -2935,7 +3281,9 @@ def track_current_phase(coords, current_loc):
     lat_to_nm = 60.0
     lon_to_nm = 60.0 * math.cos(math.radians(cur_lat))
 
-    cx, cy = 0.0, 0.0
+    #normalised coord system in nm centred on aircraft loc
+    cx = 0
+    cy = 0
     pts = []
     for crd in coords:
         x = (crd.longitude - cur_lon) * lon_to_nm
@@ -2990,10 +3338,17 @@ def track_current_phase(coords, current_loc):
             'from_idx': best_leg_idx,
             'to_idx': best_leg_idx + 1,
             'dist_to_to_pt_nm': dist_to_to_pt,
-            'leg_length_nm': leg_length
+            'leg_length_nm': leg_length,
+            'track_offset': min_perp_dist
         }
     else:
         # Flag -1 or 1: Outside MBR or not matched inside any vector bounds
+        # return distance to closest of first and last point
+        # CP = possible aircraft location
+        #  CP0>   |---+---CP1>---phse1---+----|-----+---phs2----|---lastphs--|  CP4> 
+        #                                       CP2>
+        #                           CP3>                                 
+        
         x_first, y_first = pts[0]
         x_last, y_last = pts[-1]
         
@@ -3007,7 +3362,8 @@ def track_current_phase(coords, current_loc):
                 'from_idx': 0,
                 'to_idx': 1,
                 'dist_to_to_pt_nm': dist_to_first,
-                'leg_length_nm': 0.0
+                'leg_length_nm': 0.0,
+                'track_offset': 0.0
             }
         else:
             # Flag 1: Closer to final waypoint
@@ -3016,11 +3372,9 @@ def track_current_phase(coords, current_loc):
                 'from_idx': n - 2,
                 'to_idx': n - 1,
                 'dist_to_to_pt_nm': dist_to_last,
-                'leg_length_nm': 0.0
+                'leg_length_nm': 0.0,
+                'track_offset': 0.0
             }
-
-
-
 
 def set_dark_mode(app):
     app.setStyle("Fusion") # Required for custom palettes to work
@@ -3039,6 +3393,7 @@ def set_dark_mode(app):
     palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
     palette.setColor(QPalette.HighlightedText, Qt.black)
     app.setPalette(palette)
+#endregion UTILITY FUNCTIONS
 
 class CIVA_INS_WP_Tracker:
     def __init__(self, uiInstance):
@@ -3047,11 +3402,13 @@ class CIVA_INS_WP_Tracker:
        # Set up a flag to track if OCR capability is active
         self.ui = uiInstance
         self.ui.ocr_available = True
+        # if failed test
+        self.ui.ocr_functional = True
         
         # Optional: Set explicit path if needed before checking
         # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         
-        # Check if Tesseract is installed and available immediately upon startup
+        # Check if Tesseract is installed and available immediately upon star
         self._verify_tesseract_presence()
 
     def _verify_tesseract_presence(self):
@@ -3059,7 +3416,7 @@ class CIVA_INS_WP_Tracker:
         try:
             # Running tesseract_version() forces a quick check against the system binary
             version = pytesseract.get_tesseract_version()
-            self.ui.update_progress_log(f" [OCR SUCCESS] Tesseract Engine found (v{version}).")
+            self.ui.update_progress_log(f" OCR:Tesseract Engine found (v{version}).")
         except pytesseract.TesseractNotFoundError:
             # Catch the specific error and gracefully downgrade features
             self.ui.ocr_available = False
@@ -3076,7 +3433,7 @@ class CIVA_INS_WP_Tracker:
                 return monitor
         return sct.monitors[1]  # Safely fall back to the first physical display if index matches fail
 
-    def capture_and_ocr_digit(self, ui_Instance):
+    def capture_and_ocr_digit(self, ui_Instance, isTest):
         """
         Captures a screen rect from the primary display and extracts a single digit.
         
@@ -3154,8 +3511,7 @@ class CIVA_INS_WP_Tracker:
                 # =========================================================================
 
                 # --- DEBUG IMAGE EXPORT ---
-                debug = True
-                if debug:
+                if isTest:
                     debug_dir = os.path.join(os.path.dirname(__file__), "ocr_debug")
                     os.makedirs(debug_dir, exist_ok=True)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -3168,13 +3524,28 @@ class CIVA_INS_WP_Tracker:
                 # --psm 10: Treat image as a single character
                 # --oem 0: Forces Legacy Engine, which excels at isolated mechanical fonts
                 # --psm 13 treats the text line as a raw sequence, bypassing single-glyph distortion bugs
-                custom_config = r'--psm 13 --oem 3 -c tessedit_char_whitelist=0123456789'
+                # 0: Legacy engine only.
+                # 1: Neural nets LSTM engine only.
+                # 2: Legacy + LSTM engines.
+                # 3: Default, based on what is available 
+                # PSM: ModeDescription
+                # 0 Orientation and script detection (OSD) only.
+                # 3 Default: Fully automatic page segmentation without OSD.
+                # 6 Assume a single uniform block of text.
+                # 7 Treat the image as a single text line.
+                # 10 Treat the image as a single character.
+                # 11 Sparse text: Find as much text as possible in no particular order.               
+                
+                #custom_config = r'--psm 13 --oem 3 -c tessedit_char_whitelist=0123456789'
+                custom_config = r'--psm 10 --oem 3 -c tessedit_char_whitelist=0123456789'
+
 
                 ocr_result = pytesseract.image_to_string(img_final, config=custom_config)
                 digit_str = ocr_result.strip()
                 # Handle the specific '41' / '11' multi-character glitch gracefully
+                logger.info (f"Digit string returned from OCR: {digit_str}")            
                 if len(digit_str) > 1:
-                    logger.info (f"Digit string returned from OCR: {digit_str}")
+                    # logger.info (f"Digit string returned from OCR: {digit_str}")
                     if '1' in digit_str and '4' in digit_str:
                         # If Tesseract returned '41', '11', or '71', the true dial index is 1
                         return 1
@@ -3185,9 +3556,12 @@ class CIVA_INS_WP_Tracker:
                         # General fallback: grab the first character if another number acts up
                         digit_str = digit_str[0]
                 return int(digit_str) if digit_str.isdigit() else None
+        
         except pytesseract.TesseractNotFoundError:
             # If it somehow breaks dynamically during flight, catch it here
             self.ui.ocr_available = False
+            self.ui.ocr_functional = False
+            self.ui.ocr_failed = True
             return None
             # except pytesseract.TesseractError:
             #     # Fallback: Some Tesseract installations don't include the legacy engine data assets.
@@ -3196,6 +3570,7 @@ class CIVA_INS_WP_Tracker:
             #     ocr_result = pytesseract.image_to_string(img_final, config=custom_config_fallback)
             #     digit = ocr_result.strip()
             #     return int(digit) if digit.isdigit() else None
+
 
 
 if __name__ == "__main__":

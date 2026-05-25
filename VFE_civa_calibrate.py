@@ -42,6 +42,7 @@ BUTTONS = [
     {"name": "automan", "prompt": "Click on AUTO-MAN selector"},
     {"name": "wy pt chg", "prompt": "Click on WY PT CHG"},
     {"name": "hold", "prompt": "Click on HOLD"},
+    # not used, upsets device state...
     #{"name": "remote", "prompt": "Click on REMOTE"},
     {"name": "insert", "prompt": "Click on INSERT"},
     {"name": "waypoint selector", "prompt": "Click on WAYPOINT SELECTOR"},
@@ -133,14 +134,27 @@ class CalibrationWizard:
             self.recorded_lines.append(TEMPLATES["header"].format(name=btn['name']))
 
             
-            if "selector" in btn['name']:
+            if "selector" in btn['name'] or \
+                btn['name'] == "automan":
                 self.update_status(f"  Setting template for: {btn['name']}")
                 self.recorded_lines.append(TEMPLATES["move"].format(x=x, y=y, wait=self.global_slow_wait, name=btn['name']))
                 self.add_standard_action("click_down")
                 self.add_standard_action("click_up")
-                self.add_delayed_action("scroll_f")
+                #self.add_delayed_action("scroll_f")
+                self.add_standard_action("scroll_f")
                 self.add_standard_action("click_down")
                 self.add_standard_action("click_up")
+                self.recorded_lines.append("")
+                #---- Add a back version of the selector! ----
+                hdr_name = TEMPLATES["header"] + " back"
+                self.recorded_lines.append(hdr_name.format(name=btn['name']))
+                self.recorded_lines.append(TEMPLATES["move"].format(x=x, y=y, wait=self.global_slow_wait, name=btn['name']))
+                self.add_standard_action("click_down")
+                self.add_standard_action("click_up")
+                #self.add_delayed_action("scroll_f")
+                self.add_standard_action("scroll_b")
+                self.add_standard_action("click_down")
+                self.add_standard_action("click_up")                
             else:
                 self.recorded_lines.append(TEMPLATES["move"].format(x=x, y=y, wait=self.global_wait, name=btn['name']))
                 self.add_standard_action("click_down")

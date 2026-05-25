@@ -26,15 +26,13 @@ on the CIVA unit, thus requiring the use of automation, but through the standard
     
 2.  Target Focus: Output is targeted specifically at the MSFS process. If MSFS is not running the `system status` will change and automation operations suspended  You should ensure MSFS is running full screen and maximised.
     
-3.  Macro timing: The calibrate script requests and outputs a wait time between mouse clicks. This serves several purposes: 
+3.  Macro timing: Calibrate reads the `Global Wait Time` and outputs the delay between mouse clicks. This serves several purposes: 
     - ensures the macro runs at optimal speed; 
-    - ensures it is not so fast as to fail with inherent responsiveness in the UI to contend with. 
-    
-    Also there is some satisfaction in watching the key inputs, so this is definitely a user choice. 100ms is recommended and is the minimum wait time.
+    - ensures it is not so fast as to fail with inherent responsiveness in the UI to contend with. 100ms is recommended and is the minimum wait time.
     
 5.  It is understood that during the CIVA load, no mouse or keyboard activity is possible. 
 
-6. An optional OCR engine is built in to allow data not available through SimConnect to be acquired from the MSFS cockpit UI. In particular the `waypoint selector` is used to capture the current ID. If **Python Tesseract** (https://builtin.com/articles/python-tesseract) is not installed, this facility will be disabled.
+6. An optional OCR engine is built in to allow data not available through SimConnect to be acquired from the MSFS cockpit UI. In particular the `waypoint selector` is used to capture the ID . If **Python Tesseract** (https://builtin.com/articles/python-tesseract) is not installed, this facility will be disabled.
 
 6. The project is released in source and executable format.
 
@@ -64,16 +62,13 @@ This project was developed through a collaborative process between the author an
 - **On-Screen Feedback**: Includes audio beeps, message box with information and warnings, communication status labels.
 - **Custom Calibration**: Captures control locations for saved custom views for reliable and rapid automation steps.
 - **Portability**: This application could be used in other MSFS aircraft and converted to run in other simulators. The architecture changes to a more generic approach to the **flight engineer** role, allowing specialised areas such as specific cockpit checklist phases to be automated in future versions.
-- **Minimal Footprint**: SimConnect telemetry refresh requires only a 60 sec cycle. Other threads trigger on user request. May be minimised between phase loads,
-- **System tray**: A small program **VFEtray** is started by **VFE_civa_ins** in the system tray to action the import requests. It uses IPC to pass status changes to **VFE_civa_ins** for dialogue displays in MSFS as required.
-- **State preservation** between runs. The previous imported flight plan, calibration, hotkeys and other settings restored
+- **Minimal Footprint**: SimConnect telemetry refresh requires only a 10 sec cycle. Other threads trigger on user request. May be minimised between phase loads,
+- **System tray**: A small program **VFEtray** is started by **VFE_civa_ins** in the system tray to action the automation. It uses IPC to pass status changes to **VFE_civa_ins** for dialogue displays in MSFS as required.
+- **Settings preserved** between runs. The previous imported flight plan, calibration, hotkeys and other settings restored
 
 ## 🛠️ Requirements
 
-- A folder to contain the executables. 
 - **Fplans folder** where you normally direct generated flight plans from **Simbrief**, or similar. A sub-folder, `\phases` will be created by the application for the generated plans.
-- **Run as Administrator**  `VFE_civa_ins` and `VFEtray` require elevated execution to permit global hotkey availability
-  from other applications.
 - **MSFS** 
   The `Cockpit Interaction System` Flight Interface setting must be set to `Lock`. Single scroll on
   the waypoint selector fails if `Legacy` is used.
@@ -107,10 +102,10 @@ This project was developed through a collaborative process between the author an
 
     v. This once-only step has been completed and`Group 2` can be unchecked.
     
-5. Calibrate: 
+5. **Calibrate**: 
 
 	i. Create a view in MSFS (Chase Plane is a good option here) that shows the pilot CIVA INS 
-	   filling 70% of screen or better. Ensure the view is repeatable.
+	   filling the screen height. Ensure the view is repeatable.
 
     ii. Click `Run Calibration` and follow the prompts to `left mouse click` on each named button or selector in turn. The 2,4,6,8 buttons provide the cardinal directions N, W, S, E and only need recording once.
     
@@ -175,7 +170,7 @@ This project was developed through a collaborative process between the author an
     ii. **Import**: Hit the hotkey `Ctrl + Shift + 1` for phase 1 and watch  the points load for the first phase.
     When complete, use `Ctrl + Shift + F1` at any time to display a message box with each waypoint number, name and elevation.
 
-	iii. **Arm Direct-To**: Manually click `Wy Pt Chg` button and select 0 to 1 (or the desired waypoint id for a `direct to` INS navigation direction, and `Insert`. The `From-To` display will change. The CIVA convention `current location:0` to `waypoint number` should be used to initiate the device for the first phase from the end of the SID, for example.
+	iii. **Arm Direct-To**: Manually click `Wy Pt Chg` button and select 0 to 1 (or the desired waypoint id for a `direct to` INS navigation direction, and `Insert`. The `From-To` display will change. The CIVA convention `current location:0` to `waypoint number` should be used to initiate the device for the first phase from the end of the SID, for example. The INS will also select an intercept with a leg, with a non-zero `from`.
 
 	iv. **Switch AP to INS nav**: Clear `Hdg Hld`, select `INS Navigation` and hit `INS` on the AP panel.
 
@@ -240,7 +235,7 @@ This could be placed in the flight plans Simbrief export folder as an example.
 ## 🚀 Roadmap
 - [ ] Add usage videos
 - [ ] Test in FSS B727
-- [ ] Add a popup message or a kneepad note to name waypoints as the `from-to` selector progresses.
+- [X] Add a popup message or a kneepad note to name waypoints as the `from-to` selector progresses.
 - [ ] An option to push a set of named waypoints on the fly for a diversion would be appealing, with a lookup to find the coordinates. This could involve some interaction with the EFB.
 - [ ] Extend to handle generic checklist named panel automation.
 
